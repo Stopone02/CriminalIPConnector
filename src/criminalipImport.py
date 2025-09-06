@@ -140,10 +140,14 @@ class CriminalIPConnector:
         if not ip_data:
             return f"Could not retrieve data for {ip_to_enrich} from Criminal IP."
         
+        self.helper.log_info(f"IP Data: {ip_data}")
+
         # Convert to STIX objects
         stix_objects = self._to_stix_objects(ip_data)
         if not stix_objects:
             return f"No STIX objects created for {ip_to_enrich}."
+        
+        self.helper.log_info(f"STIX Objects: {stix_objects}")
         
         # Create a bundle and send it to OpenCTI
         bundle = Bundle(objects=stix_objects, allow_custom=True).serialize()
