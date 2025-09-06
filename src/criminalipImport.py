@@ -58,9 +58,28 @@ class CriminalIPConnector:
         except requests.exceptions.RequestException as e:
             self.helper.log_error(f"Error calling Criminal IP API for {ip}: {e}")
             return None
-
+    
     def _to_stix_objects(self, ip_data: Dict[str, Any]) -> List[Any]:
         """Convert Criminal IP API response to a list of STIX objects"""
+        
+        # 먼저 재사용할 표준 객체들의 ID를 가져옵니다.
+        try:
+            tlp_white_marking = self.helper.api.marking_definition.read(filters={"key": "definition", "values": ["TLP:CLEAR"]})
+            tlp_white_id = tlp_white_marking['id']
+            
+            identity = self.helper.api.identity.read(filters={"key": "name", "values": ["CriminalIPConnector"]})
+            if identity is None:
+                # ID가 없으면 커넥터 ID로 생성
+                identity = self.helper.api.identity.create(
+                    type="Organization",
+                    name="CriminalIP Connector",
+                    description="Connector for Criminal IP threat intelligence."
+                )
+            identity_id = identity['id']
+        except Exception as e:
+            self.helper.log_error(f"Error getting standard object IDs: {e}")
+            return []
+
         objects = []
         ip_value = ip_data.get("ip")
         if not ip_value:
@@ -88,8 +107,8 @@ class CriminalIPConnector:
                 pattern=f"[ipv4-addr:value = '{ip_value}']",
                 confidence=confidence,
                 labels=labels,
-                object_marking_refs=[self.helper.api.marking_definition.get_id_by_definition("TLP:WHITE")],
-                created_by_ref=self.helper.api.identity.get_id_by_name("CriminalIP Connector")
+                object_marking_refs=[tlp_white_id],
+                created_by_ref=identity_id
             )
             objects.append(indicator_score)
 
@@ -102,8 +121,8 @@ class CriminalIPConnector:
                 pattern_type="stix",
                 pattern=f"[ipv4-addr:value = '{ip_value}']",
                 labels=tag_labels,
-                object_marking_refs=[self.helper.api.marking_definition.get_id_by_definition("TLP:WHITE")],
-                created_by_ref=self.helper.api.identity.get_id_by_name("CriminalIP Connector")
+                object_marking_refs=[tlp_white_id],
+                created_by_ref=identity_id
             )
             objects.append(indicator_tags)
 
@@ -116,6 +135,63 @@ class CriminalIPConnector:
             objects.append(loc_stix)
 
         return objects
+    # def _to_stix_objects(self, ip_data: Dict[str, Any]) -> List[Any]:
+    #     """Convert Criminal IP API response to a list of STIX objects"""
+    #     objects = []
+    #     ip_value = ip_data.get("ip")
+    #     if not ip_value:
+    #         return []
+
+    #     # Create IPv4Address object first as a foundation
+    #     ipv4_addr_stix = IPv4Address(value=ip_value)
+    #     objects.append(ipv4_addr_stix)
+
+    #     # Create Indicator for Score
+    #     score = ip_data.get("score", {})
+    #     inbound = score.get("inbound")
+    #     outbound = score.get("outbound")
+    #     if inbound is not None or outbound is not None:
+    #         confidence = max(int(inbound or 0), int(outbound or 0))
+    #         labels = []
+    #         if inbound is not None:
+    #             labels.append(f"criminalip-inbound-score:{inbound}")
+    #         if outbound is not None:
+    #             labels.append(f"criminalip-outbound-score:{outbound}")
+            
+    #         indicator_score = Indicator(
+    #             name=f"Criminal IP Reputation for {ip_value}",
+    #             pattern_type="stix",
+    #             pattern=f"[ipv4-addr:value = '{ip_value}']",
+    #             confidence=confidence,
+    #             labels=labels,
+    #             object_marking_refs=[self.helper.api.marking_definition.get_id_by_definition("TLP:WHITE")],
+    #             created_by_ref=self.helper.api.identity.get_id_by_name("CriminalIP Connector")
+    #         )
+    #         objects.append(indicator_score)
+
+    #     # Create Indicator for Tags
+    #     tags = ip_data.get("tags", {})
+    #     tag_labels = [k.replace("is_", "").upper() for k, v in tags.items() if isinstance(v, bool) and v]
+    #     if tag_labels:
+    #         indicator_tags = Indicator(
+    #             name=f"Criminal IP Tags for {ip_value}",
+    #             pattern_type="stix",
+    #             pattern=f"[ipv4-addr:value = '{ip_value}']",
+    #             labels=tag_labels,
+    #             object_marking_refs=[self.helper.api.marking_definition.get_id_by_definition("TLP:WHITE")],
+    #             created_by_ref=self.helper.api.identity.get_id_by_name("CriminalIP Connector")
+    #         )
+    #         objects.append(indicator_tags)
+
+    #     # Create AS and Location
+    #     if ip_data.get("asn"):
+    #         as_stix = AutonomousSystem(number=ip_data.get("asn"))
+    #         objects.append(as_stix)
+    #     if ip_data.get("country_code"):
+    #         loc_stix = Location(country=ip_data.get("country_code"))
+    #         objects.append(loc_stix)
+
+    #     return objects
 
     def _process_message(self, data):
         """Main method to process a message from the bus"""
