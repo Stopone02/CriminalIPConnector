@@ -64,10 +64,20 @@ class CriminalIPConnector:
         
         # 먼저 재사용할 표준 객체들의 ID를 가져옵니다.
         try:
-            tlp_white_marking = self.helper.api.marking_definition.read(filters={"key": "definition", "values": ["TLP:CLEAR"]})
-            tlp_white_id = tlp_white_marking['id']
+            tlp_clear_filter = {"mode": "and", "filters": [{"key": "definition", "values": ["TLP:CLEAR"]}]}
+            tlp_marking = self.helper.api.marking_definition.read(filters=tlp_clear_filter)
+            if not tlp_marking:
+                # TLP:CLEAR가 없으면 TLP:WHITE로 다시 시도
+                tlp_white_filter = {"mode": "and", "filters": [{"key": "definition", "values": ["TLP:WHITE"]}]}
+                tlp_marking = self.helper.api.marking_definition.read(filters=tlp_white_filter)
+                if not tlp_marking:
+                    self.helper.log_error("Could not find TLP:CLEAR or TLP:WHITE marking definition.")
+                    return []
+            tlp_id = tlp_marking['id']
             
-            identity = self.helper.api.identity.read(filters={"key": "name", "values": ["CriminalIPConnector"]})
+            # 필터 형식을 새로운 구조로 수정
+            identity_filter = {"mode": "and", "filters": [{"key": "name", "values": ["CriminalIPConnector"]}]}
+            identity = self.helper.api.identity.read(filters=identity_filter)
             if identity is None:
                 # ID가 없으면 커넥터 ID로 생성
                 identity = self.helper.api.identity.create(
@@ -107,7 +117,7 @@ class CriminalIPConnector:
                 pattern=f"[ipv4-addr:value = '{ip_value}']",
                 confidence=confidence,
                 labels=labels,
-                object_marking_refs=[tlp_white_id],
+                object_marking_refs=[tlp_id],
                 created_by_ref=identity_id
             )
             objects.append(indicator_score)
@@ -121,7 +131,7 @@ class CriminalIPConnector:
                 pattern_type="stix",
                 pattern=f"[ipv4-addr:value = '{ip_value}']",
                 labels=tag_labels,
-                object_marking_refs=[tlp_white_id],
+                object_marking_refs=[tlp_id],
                 created_by_ref=identity_id
             )
             objects.append(indicator_tags)
