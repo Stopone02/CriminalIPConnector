@@ -242,9 +242,10 @@ class CriminalIPConnector:
         
         # Create a bundle and send it to OpenCTI
         bundle = Bundle(objects=stix_objects, allow_custom=True).serialize()
-        self.helper.send_stix2_bundle(bundle)
+        result = self.helper.send_stix2_bundle(bundle, entity_id=observable.get("id"))
 
         self.helper.log_info(f"Successfully enriched IP {ip_to_enrich}.")
+        self.helper.log_info(f"Bundle sent. Result: {result}")
         return "Success"
 
     def start(self):
