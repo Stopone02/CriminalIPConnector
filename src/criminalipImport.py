@@ -65,20 +65,22 @@ class CriminalIPConnector:
         # 먼저 재사용할 표준 객체들의 ID를 가져옵니다.
         try:
             # 최신 필터 형식으로 수정 (filterGroups 사용)
-            tlp_clear_filters = [
-                {"key": "definition", "values": ["TLP:CLEAR"], "mode": "IN"}
-            ]
-            tlp_marking = self.helper.api.marking_definition.read(filters=tlp_clear_filters)
+            tlp_clear_filter = {
+                "mode": "and",
+                "filters": [{"key": "definition", "values": ["TLP:CLEAR"]}],
+            }
+            tlp_marking = self.helper.api.marking_definition.read(filters=tlp_clear_filter)
             if not tlp_marking:
                 self.helper.log_error("Could not find TLP:CLEAR marking definition.")
                 return []
             tlp_id = tlp_marking['id']
             
             # 최신 필터 형식으로 수정 (filterGroups 사용)
-            identity_filters = [
-                {"key": "name", "values": ["CriminalIPConnector"], "mode": "IN"}
-            ]
-            identity = self.helper.api.identity.read(filters=identity_filters)
+            identity_filter = {
+                "mode": "and",
+                "filters": [{"key": "name", "values": ["CriminalIP Connector"]}],
+            }
+            identity = self.helper.api.identity.read(filters=identity_filter)
             if identity is None:
                 # ID가 없으면 커넥터 ID로 생성
                 identity = self.helper.api.identity.create(
