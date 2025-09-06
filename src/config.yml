@@ -1,0 +1,28 @@
+# === Criminal IP Connector: config.yml.sample ===
+# Copy to config.yml and fill values or use environment variables.
+
+opencti:
+  url: ${OPENCTI_URL:-http://localhost:8080}
+  token: ${OPENCTI_TOKEN}
+  connector:
+    id: ${CONNECTOR_ID:-"criminalip-connector"}
+    name: ${CONNECTOR_NAME:-"Criminal IP Enrichment"}
+    scope: ${CONNECTOR_SCOPE:-"IPv4-Addr"}  # CSV e.g. "IPv4-Addr,Domain-Name"
+    auto: ${CONNECTOR_AUTO:-true}
+    confidence_level: ${CONNECTOR_CONFIDENCE_LEVEL:-70}
+    log_level: ${CONNECTOR_LOG_LEVEL:-"INFO"}
+
+criminalip:
+  api_key: ${CRIMINALIP_TOKEN}
+  base_url: ${CRIMINALIP_BASE_URL:-https://api.criminalip.io/v1}
+  endpoints:
+    ip_data: "/ip/data"
+    ip_summary: "/ip/summary"
+  timeouts:
+    connect: ${CRIMINALIP_TIMEOUT_CONNECT:-5}
+    read:  ${CRIMINALIP_TIMEOUT_READ:-15}
+
+
+demo:
+  # When running standalone (without OpenCTI bus), query this IP once
+  test_ip: ${TEST_IP:-8.8.8.8}

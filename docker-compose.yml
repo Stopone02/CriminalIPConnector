@@ -1,0 +1,31 @@
+version: "3.9"
+services:
+  connector-criminalip:
+    build: .
+    container_name: connector-criminalip
+    restart: unless-stopped
+    environment:
+      # OpenCTI settings (placeholders; wire to real values in deployment)
+      - OPENCTI_URL=${OPENCTI_URL}
+      - OPENCTI_TOKEN=${OPENCTI_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_ID:-criminalip-connector}
+      - CONNECTOR_NAME=${CONNECTOR_NAME:-Criminal IP Enrichment}
+      - CONNECTOR_SCOPE=${CONNECTOR_SCOPE:-IPv4-address}   # e.g., "IPv4-Addr,Domain-Name"
+      - CONNECTOR_TYPE=${CONNECTOR_TYPE}
+      - CONNECTOR_AUTO=${CONNECTOR_AUTO:-true}
+      - CONNECTOR_CONFIDENCE_LEVEL=${CONNECTOR_CONFIDENCE_LEVEL:-70}
+      - CONNECTOR_LOG_LEVEL=${CONNECTOR_LOG_LEVEL:-INFO}
+      # Criminal IP
+      - CRIMINALIP_TOKEN=${CRIMINALIP_TOKEN}
+      # Demo-only: test IP to query when running standalone
+      - TEST_IP=${TEST_IP}
+    volumes:
+      - ./src/config.yml:/app/src/config.yml:ro
+    command: ["/app/entrypoint.sh"]
+    networks: 
+      - opencti_network
+
+networks: 
+  opencti_network:
+    name: opencti_default 
+    external: true
