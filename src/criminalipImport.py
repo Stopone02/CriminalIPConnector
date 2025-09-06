@@ -74,7 +74,7 @@ class CriminalIPConnector:
             if not tlp_marking:
                 self.helper.log_error("Could not find TLP:CLEAR marking definition.")
                 return []
-            tlp_id = tlp_marking['id']
+            tlp_id = tlp_marking['standard_id']
             
             # 최신 필터 형식으로 수정 (filterGroups 사용)
             identity_filter = {
@@ -90,7 +90,7 @@ class CriminalIPConnector:
                     name="CriminalIP Connector",
                     description="Connector for Criminal IP threat intelligence."
                 )
-            identity_id = identity['id']
+            identity_id = identity['standard_id']
         except Exception as e:
             self.helper.log_error(f"Error getting standard object IDs: {e}")
             return []
