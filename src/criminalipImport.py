@@ -68,6 +68,7 @@ class CriminalIPConnector:
             tlp_clear_filter = {
                 "mode": "and",
                 "filters": [{"key": "definition", "values": ["TLP:CLEAR"]}],
+                "filterGroups": [],
             }
             tlp_marking = self.helper.api.marking_definition.read(filters=tlp_clear_filter)
             if not tlp_marking:
@@ -78,7 +79,8 @@ class CriminalIPConnector:
             # 최신 필터 형식으로 수정 (filterGroups 사용)
             identity_filter = {
                 "mode": "and",
-                "filters": [{"key": "name", "values": ["CriminalIP Connector"]}],
+                "filters": [{"key": "name", "values": ["CriminalIPConnector"]}],
+                "filterGroups": [],
             }
             identity = self.helper.api.identity.read(filters=identity_filter)
             if identity is None:
