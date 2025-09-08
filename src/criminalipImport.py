@@ -115,17 +115,21 @@ class CriminalIPConnector:
                 labels.append(f"criminalip-inbound-score:{inbound}")
             if outbound is not None:
                 labels.append(f"criminalip-outbound-score:{outbound}")
-            
-            indicator_score = Indicator(
-                name=f"Criminal IP Reputation for {ip_value}",
-                pattern_type="stix",
-                pattern=f"[ipv4-addr:value = '{ip_value}']",
-                confidence=confidence,
-                labels=labels,
-                object_marking_refs=[tlp_id],
-                created_by_ref=identity_id
-            )
-            objects.append(indicator_score)
+
+        tags = ip_data.get("tags", {})
+        tag_labels = [k.replace("is_", "").upper() for k, v in tags.items() if isinstance(v, bool) and v]
+        labels.extend(tag_labels)
+
+        indicator_score = Indicator(
+            name=f"Criminal IP Reputation for {ip_value}",
+            pattern_type="stix",
+            pattern=f"[ipv4-addr:value = '{ip_value}']",
+            confidence=confidence,
+            labels=labels,
+            object_marking_refs=[tlp_id],
+            created_by_ref=identity_id
+        )
+        objects.append(indicator_score)
 
         # Create Indicator for Tags
         tags = ip_data.get("tags", {})
@@ -142,71 +146,36 @@ class CriminalIPConnector:
             objects.append(indicator_tags)
 
         # Create AS and Location
-        if ip_data.get("asn"):
-            as_stix = AutonomousSystem(number=ip_data.get("asn"))
-            objects.append(as_stix)
-        if ip_data.get("country_code"):
-            loc_stix = Location(country=ip_data.get("country_code"))
-            objects.append(loc_stix)
+        whois_data = ip_data.get("whois", {})
+        if whois_data and whois_data.get("data"):
+            whois_entry = whois_data["data"][0]  # 첫 번째 whois 항목 사용
+
+            # AutonomousSystem 객체 생성
+            as_number = whois_entry.get("as_no")
+            as_name = whois_entry.get("as_name")
+            if as_number:
+                as_stix = AutonomousSystem(number=as_number, name=as_name)
+                objects.append(as_stix)
+
+            # Location 객체 생성
+            country_code = whois_entry.get("org_country_code")
+            city_name = whois_entry.get("city")
+            region_name = whois_entry.get("region")
+            latitude = whois_entry.get("latitude")
+            longitude = whois_entry.get("longitude")
+
+            if country_code:
+                loc_stix = Location(
+                    country=country_code,
+                    city=city_name,
+                    region=region_name,
+                    latitude=latitude,
+                    longitude=longitude,
+                )
+                objects.append(loc_stix)
 
         return objects
-    # def _to_stix_objects(self, ip_data: Dict[str, Any]) -> List[Any]:
-    #     """Convert Criminal IP API response to a list of STIX objects"""
-    #     objects = []
-    #     ip_value = ip_data.get("ip")
-    #     if not ip_value:
-    #         return []
 
-    #     # Create IPv4Address object first as a foundation
-    #     ipv4_addr_stix = IPv4Address(value=ip_value)
-    #     objects.append(ipv4_addr_stix)
-
-    #     # Create Indicator for Score
-    #     score = ip_data.get("score", {})
-    #     inbound = score.get("inbound")
-    #     outbound = score.get("outbound")
-    #     if inbound is not None or outbound is not None:
-    #         confidence = max(int(inbound or 0), int(outbound or 0))
-    #         labels = []
-    #         if inbound is not None:
-    #             labels.append(f"criminalip-inbound-score:{inbound}")
-    #         if outbound is not None:
-    #             labels.append(f"criminalip-outbound-score:{outbound}")
-            
-    #         indicator_score = Indicator(
-    #             name=f"Criminal IP Reputation for {ip_value}",
-    #             pattern_type="stix",
-    #             pattern=f"[ipv4-addr:value = '{ip_value}']",
-    #             confidence=confidence,
-    #             labels=labels,
-    #             object_marking_refs=[self.helper.api.marking_definition.get_id_by_definition("TLP:WHITE")],
-    #             created_by_ref=self.helper.api.identity.get_id_by_name("CriminalIP Connector")
-    #         )
-    #         objects.append(indicator_score)
-
-    #     # Create Indicator for Tags
-    #     tags = ip_data.get("tags", {})
-    #     tag_labels = [k.replace("is_", "").upper() for k, v in tags.items() if isinstance(v, bool) and v]
-    #     if tag_labels:
-    #         indicator_tags = Indicator(
-    #             name=f"Criminal IP Tags for {ip_value}",
-    #             pattern_type="stix",
-    #             pattern=f"[ipv4-addr:value = '{ip_value}']",
-    #             labels=tag_labels,
-    #             object_marking_refs=[self.helper.api.marking_definition.get_id_by_definition("TLP:WHITE")],
-    #             created_by_ref=self.helper.api.identity.get_id_by_name("CriminalIP Connector")
-    #         )
-    #         objects.append(indicator_tags)
-
-    #     # Create AS and Location
-    #     if ip_data.get("asn"):
-    #         as_stix = AutonomousSystem(number=ip_data.get("asn"))
-    #         objects.append(as_stix)
-    #     if ip_data.get("country_code"):
-    #         loc_stix = Location(country=ip_data.get("country_code"))
-    #         objects.append(loc_stix)
-
-    #     return objects
 
     def _process_message(self, data):
         """Main method to process a message from the bus"""
