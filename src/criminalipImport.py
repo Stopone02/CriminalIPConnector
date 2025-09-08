@@ -10,6 +10,7 @@ from stix2 import (
     Location,
     Indicator,
     Bundle,
+    Relationship,
 )
 from pycti import OpenCTIConnectorHelper, get_config_variable
 
@@ -131,20 +132,6 @@ class CriminalIPConnector:
         )
         objects.append(indicator_score)
 
-        # Create Indicator for Tags
-        tags = ip_data.get("tags", {})
-        tag_labels = [k.replace("is_", "").upper() for k, v in tags.items() if isinstance(v, bool) and v]
-        if tag_labels:
-            indicator_tags = Indicator(
-                name=f"Criminal IP Tags for {ip_value}",
-                pattern_type="stix",
-                pattern=f"[ipv4-addr:value = '{ip_value}']",
-                labels=tag_labels,
-                object_marking_refs=[tlp_id],
-                created_by_ref=identity_id
-            )
-            objects.append(indicator_tags)
-
         # Create AS and Location
         whois_data = ip_data.get("whois", {})
         if whois_data and whois_data.get("data"):
@@ -173,6 +160,27 @@ class CriminalIPConnector:
                     longitude=longitude,
                 )
                 objects.append(loc_stix)
+
+            if as_stix:
+                # 관계: ipv4-addr이 autonomous-system에 속한다
+                as_relationship = Relationship(
+                    ipv4_addr_stix,
+                    'belongs-to',
+                    as_stix,
+                    created_by_ref=identity_id
+                )
+                objects.append(as_relationship)
+
+            # Location 객체가 존재하면 관계를 추가
+            if loc_stix:
+                # 관계: ipv4-addr이 location에 위치한다
+                loc_relationship = Relationship(
+                    ipv4_addr_stix,
+                    'located-at',
+                    loc_stix,
+                    created_by_ref=identity_id
+                )
+                objects.append(loc_relationship)
 
         return objects
 
