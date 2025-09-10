@@ -11,6 +11,7 @@ from stix2 import (
     Indicator,
     Bundle,
     Relationship,
+    Vulnerability, 
 )
 from pycti import OpenCTIConnectorHelper, get_config_variable
 
@@ -24,19 +25,13 @@ class CriminalIPConnector:
         """
         Initialize the CriminalIPConnector with necessary configurations
         """
-        # Load configuration
-        config_file_path = os.path.join(
-            os.path.dirname(__file__), "config.yml"
-        )
+        config_file_path = os.path.join(os.path.dirname(__file__), "config.yml")
         config = (
             yaml.load(open(config_file_path), Loader=yaml.FullLoader)
             if os.path.isfile(config_file_path)
             else {}
         )
-        # Initialize OpenCTI connector helper
         self.helper = OpenCTIConnectorHelper(config)
-
-        # Get Criminal IP API Key
         self.api_key = get_config_variable(
             "CRIMINALIP_TOKEN", ["criminalip", "api_key"], config
         )
@@ -44,48 +39,49 @@ class CriminalIPConnector:
             msg = "Criminal IP API key is not set."
             self.helper.log_error(msg)
             raise ValueError(msg)
-        
-        self.base_url = "https://api.criminalip.io/v1"
+        self.base_url = "https://api.criminalip.io"
 
-    def _call_api(self, endpoint: str, ip: str) -> Dict[str, Any]:
+    def _call_api(self, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """A helper method to call the Criminal IP API"""
         url = f"{self.base_url}{endpoint}"
         headers = {"x-api-key": self.api_key}
-        params = {"ip": ip}
         try:
             response = requests.get(url, headers=headers, params=params, timeout=20)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            self.helper.log_error(f"Error calling Criminal IP API for {ip}: {e}")
+            self.helper.log_error(f"Error calling Criminal IP API for {params.get('ip')}: {e}")
             return None
     
+    def _convert_score_to_confidence(self, score_str: str) -> int:
+        """Converts Criminal IP score string to STIX confidence integer."""
+        score_map = {
+            "Critical": 95,
+            "Dangerous": 85,
+            "Moderate": 65,
+            "Low": 35,
+            "Safe": 10,
+        }
+        return score_map.get(score_str, 0)
+
     def _to_stix_objects(self, ip_data: Dict[str, Any]) -> List[Any]:
         """Convert Criminal IP API response to a list of STIX objects"""
         
-        # 먼저 재사용할 표준 객체들의 ID를 가져옵니다.
+        # === [디버깅 코드] 이 라인이 로그에 보이는지 확인하기 위한 코드입니다. ===
+        self.helper.log_info("--- RUNNING LATEST CODE VERSION ---")
+        # =================================================================
+        
         try:
-            # 최신 필터 형식으로 수정 (filterGroups 사용)
-            tlp_clear_filter = {
-                "mode": "and",
-                "filters": [{"key": "definition", "values": ["TLP:CLEAR"]}],
-                "filterGroups": [],
-            }
+            tlp_clear_filter = {"mode": "and", "filters": [{"key": "definition", "values": ["TLP:CLEAR"]}], "filterGroups": []}
             tlp_marking = self.helper.api.marking_definition.read(filters=tlp_clear_filter)
             if not tlp_marking:
                 self.helper.log_error("Could not find TLP:CLEAR marking definition.")
                 return []
             tlp_id = tlp_marking['standard_id']
             
-            # 최신 필터 형식으로 수정 (filterGroups 사용)
-            identity_filter = {
-                "mode": "and",
-                "filters": [{"key": "name", "values": ["CriminalIPConnector"]}],
-                "filterGroups": [],
-            }
+            identity_filter = {"mode": "and", "filters": [{"key": "name", "values": ["CriminalIP Connector"]}], "filterGroups": []}
             identity = self.helper.api.identity.read(filters=identity_filter)
             if identity is None:
-                # ID가 없으면 커넥터 ID로 생성
                 identity = self.helper.api.identity.create(
                     type="Organization",
                     name="CriminalIP Connector",
@@ -101,89 +97,99 @@ class CriminalIPConnector:
         if not ip_value:
             return []
 
-        # Create IPv4Address object first as a foundation
         ipv4_addr_stix = IPv4Address(value=ip_value)
         objects.append(ipv4_addr_stix)
 
-        # Create Indicator for Score
-        score = ip_data.get("score", {})
-        inbound = score.get("inbound")
-        outbound = score.get("outbound")
-        if inbound is not None or outbound is not None:
-            confidence = max(int(inbound or 0), int(outbound or 0))
-            labels = []
-            if inbound is not None:
-                labels.append(f"criminalip-inbound-score:{inbound}")
-            if outbound is not None:
-                labels.append(f"criminalip-outbound-score:{outbound}")
+        labels = []
+        
+        issues = ip_data.get("issues", {})
+        for key, value in issues.items():
+            if isinstance(value, bool) and value:
+                label = key.replace("is_", "").upper()
+                labels.append(label)
 
-        tags = ip_data.get("tags", {})
-        tag_labels = [k.replace("is_", "").upper() for k, v in tags.items() if isinstance(v, bool) and v]
-        labels.extend(tag_labels)
+        ip_category = ip_data.get("ip_category", {}).get("data", [])
+        for category in ip_category:
+            if category.get("type"):
+                labels.append(category.get("type").upper())
+
+        score_data = ip_data.get("score", {})
+        inbound_score_str = score_data.get("inbound")
+        outbound_score_str = score_data.get("outbound")
+        
+        inbound_confidence = self._convert_score_to_confidence(inbound_score_str)
+        outbound_confidence = self._convert_score_to_confidence(outbound_score_str)
+        overall_confidence = max(inbound_confidence, outbound_confidence)
 
         indicator_score = Indicator(
             name=f"Criminal IP Reputation for {ip_value}",
             pattern_type="stix",
             pattern=f"[ipv4-addr:value = '{ip_value}']",
-            confidence=confidence,
-            labels=labels,
+            confidence=overall_confidence,
+            labels=list(set(labels)),
             object_marking_refs=[tlp_id],
-            created_by_ref=identity_id
+            created_by_ref=identity_id,
+            custom_properties={
+                "x_criminalip_inbound_score": inbound_score_str,
+                "x_criminalip_outbound_score": outbound_score_str
+            }
         )
         objects.append(indicator_score)
 
-        # Create AS and Location
-        whois_data = ip_data.get("whois", {})
-        if whois_data and whois_data.get("data"):
-            whois_entry = whois_data["data"][0]  # 첫 번째 whois 항목 사용
+        as_stix = None
+        loc_stix = None
 
-            # AutonomousSystem 객체 생성
+        whois_data = ip_data.get("whois", {}).get("data")
+
+        if whois_data:
+            whois_entry = whois_data[0]
             as_number = whois_entry.get("as_no")
-            as_name = whois_entry.get("as_name")
             if as_number:
-                as_stix = AutonomousSystem(number=as_number, name=as_name)
+                as_stix = AutonomousSystem(number=as_number, name=whois_entry.get("as_name"))
                 objects.append(as_stix)
 
-            # Location 객체 생성
             country_code = whois_entry.get("org_country_code")
-            city_name = whois_entry.get("city")
-            region_name = whois_entry.get("region")
-            latitude = whois_entry.get("latitude")
-            longitude = whois_entry.get("longitude")
-
             if country_code:
                 loc_stix = Location(
-                    country=country_code,
-                    city=city_name,
-                    region=region_name,
-                    latitude=latitude,
-                    longitude=longitude,
+                    country=country_code.upper(),
+                    city=whois_entry.get("city"),
+                    region=whois_entry.get("region"),
+                    latitude=whois_entry.get("latitude"),
+                    longitude=whois_entry.get("longitude"),
                 )
                 objects.append(loc_stix)
+        
+        if as_stix:
+            self.helper.log_info(f"Created AS_STIX")
+            as_rel = Relationship(ipv4_addr_stix, 'belongs-to', as_stix, created_by_ref=identity_id)
+            objects.append(as_rel)
 
-            if as_stix:
-                # 관계: ipv4-addr이 autonomous-system에 속한다
-                as_relationship = Relationship(
+        if loc_stix:
+            self.helper.log_info(f"Created LOC STIX")
+            loc_rel = Relationship(ipv4_addr_stix, 'located-at', loc_stix, created_by_ref=identity_id)
+            objects.append(loc_rel)
+
+        vulnerabilities = ip_data.get("vulnerability", {}).get("data", [])
+        for vuln in vulnerabilities:
+            cve_id = vuln.get("cve_id")
+            if cve_id:
+                vuln_stix = Vulnerability(
+                    name=cve_id,
+                    description=vuln.get("cve_description"),
+                    created_by_ref=identity_id,
+                    object_marking_refs=[tlp_id]
+                )
+                objects.append(vuln_stix)
+                
+                vuln_rel = Relationship(
                     ipv4_addr_stix,
-                    'belongs-to',
-                    as_stix,
+                    'has',
+                    vuln_stix,
                     created_by_ref=identity_id
                 )
-                objects.append(as_relationship)
-
-            # Location 객체가 존재하면 관계를 추가
-            if loc_stix:
-                # 관계: ipv4-addr이 location에 위치한다
-                loc_relationship = Relationship(
-                    ipv4_addr_stix,
-                    'located-at',
-                    loc_stix,
-                    created_by_ref=identity_id
-                )
-                objects.append(loc_relationship)
-
+                objects.append(vuln_rel)
+                
         return objects
-
 
     def _process_message(self, data):
         """Main method to process a message from the bus"""
@@ -194,41 +200,38 @@ class CriminalIPConnector:
             self.helper.log_error(f"Observable not found with id {entity_id}.")
             return "Observable not found"
 
-        # OpenCTI 버전에 따라 'value' 또는 'observable_value' 키를 사용하므로, 둘 다 확인
         ip_to_enrich = observable.get("value") or observable.get("observable_value")
-
         if not ip_to_enrich:
             self.helper.log_error(f"Could not find IP value in observable: {observable}")
             return "IP value not found in observable."
 
         self.helper.log_info(f"Processing IP: {ip_to_enrich}")
 
-        # Call Criminal IP API
-        ip_data = self._call_api("/ip/data", ip_to_enrich)
+        endpoint = "/v1/asset/ip/report"
+        params = {"ip": ip_to_enrich}
+        ip_data = self._call_api(endpoint, params)
+        
         if not ip_data:
             return f"Could not retrieve data for {ip_to_enrich} from Criminal IP."
         
         self.helper.log_info(f"IP Data: {ip_data}")
-
-        # Convert to STIX objects
+        
         stix_objects = self._to_stix_objects(ip_data)
         if not stix_objects:
             return f"No STIX objects created for {ip_to_enrich}."
         
         self.helper.log_info(f"STIX Objects: {stix_objects}")
         
-        # Create a bundle and send it to OpenCTI
         bundle = Bundle(objects=stix_objects, allow_custom=True).serialize()
         result = self.helper.send_stix2_bundle(bundle, entity_id=observable.get("id"))
 
-        self.helper.log_info(f"Successfully enriched IP {ip_to_enrich}.")
-        self.helper.log_info(f"Bundle sent. Result: {result}")
+        self.helper.log_info(f"Result: {result}")
+        self.helper.log_info(f"Successfully enriched IP {ip_to_enrich} with {len(stix_objects)} STIX objects.")
         return "Success"
 
     def start(self):
         """Start the connector"""
         self.helper.listen(self._process_message)
-
 
 if __name__ == "__main__":
     try:
