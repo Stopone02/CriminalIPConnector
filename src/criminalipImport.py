@@ -5,6 +5,7 @@ import requests
 from typing import Dict, Any, List
 
 from stix2 import (
+    DomainName,
     IPv4Address,
     AutonomousSystem,
     Location,
@@ -41,16 +42,27 @@ class CriminalIPConnector:
             raise ValueError(msg)
         self.base_url = "https://api.criminalip.io"
 
-    def _call_api(self, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _call_api(self, endpoint: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """A helper method to call the Criminal IP API"""
         url = f"{self.base_url}{endpoint}"
         headers = {"x-api-key": self.api_key}
         try:
-            response = requests.get(url, headers=headers, params=params, timeout=20)
+            response = requests.get(url, headers=headers, params=params or {}, timeout=20)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            self.helper.log_error(f"Error calling Criminal IP API for {params.get('ip')}: {e}")
+            self.helper.log_error(f"Error calling Criminal IP API for {url}: {e}")
+            return None
+        
+    def _call_api_post(self, endpoint: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        url = f"{self.base_url}{endpoint}"
+        headers = {"x-api-key": self.api_key}
+        try:
+            response = requests.post(url, headers=headers, data=params or {}, timeout=20)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            self.helper.log_error(f"Error calling Criminal IP API for {url}: {e}")
             return None
     
     def _convert_score_to_confidence(self, score_str: str) -> int:
@@ -63,31 +75,23 @@ class CriminalIPConnector:
             "Safe": 10,
         }
         return score_map.get(score_str, 0)
-
-    def _to_stix_objects(self, ip_data: Dict[str, Any]) -> List[Any]:
+    
+    # === IP 처리를 위한 함수 ===
+    def _to_stix_objects_for_ip(self, ip_data: Dict[str, Any], malicious_info_data: Dict[str, Any] = None) -> List[Any]:
         """Convert Criminal IP API response to a list of STIX objects"""
         
-        # === [디버깅 코드] 이 라인이 로그에 보이는지 확인하기 위한 코드입니다. ===
+        # === [디버깅 코드] 이 라인이 로그에 보이는지 확인하기 위한 코드 ===
         self.helper.log_info("--- RUNNING LATEST CODE VERSION ---")
-        # =================================================================
+        # ===========================================================
         
         try:
             tlp_clear_filter = {"mode": "and", "filters": [{"key": "definition", "values": ["TLP:CLEAR"]}], "filterGroups": []}
             tlp_marking = self.helper.api.marking_definition.read(filters=tlp_clear_filter)
-            if not tlp_marking:
-                self.helper.log_error("Could not find TLP:CLEAR marking definition.")
-                return []
-            tlp_id = tlp_marking['standard_id']
+            tlp_id = tlp_marking['standard_id'] if tlp_marking else None
             
             identity_filter = {"mode": "and", "filters": [{"key": "name", "values": ["CriminalIP Connector"]}], "filterGroups": []}
             identity = self.helper.api.identity.read(filters=identity_filter)
-            if identity is None:
-                identity = self.helper.api.identity.create(
-                    type="Organization",
-                    name="CriminalIP Connector",
-                    description="Connector for Criminal IP threat intelligence."
-                )
-            identity_id = identity['standard_id']
+            identity_id = identity['standard_id'] if identity else None
         except Exception as e:
             self.helper.log_error(f"Error getting standard object IDs: {e}")
             return []
@@ -112,6 +116,17 @@ class CriminalIPConnector:
         for category in ip_category:
             if category.get("type"):
                 labels.append(category.get("type").upper())
+
+        # === malicious-info API 응답을 라벨로 추가 ===
+        if malicious_info_data:
+            if malicious_info_data.get("is_scanner"):
+                labels.append("Scanner")
+            if malicious_info_data.get("is_c2"):
+                labels.append("C2-Server")
+            if malicious_info_data.get("is_tor"):
+                labels.append("TOR")
+            if malicious_info_data.get("is_vpn"):
+                labels.append("VPN")
 
         score_data = ip_data.get("score", {})
         inbound_score_str = score_data.get("inbound")
@@ -190,6 +205,61 @@ class CriminalIPConnector:
                 objects.append(vuln_rel)
                 
         return objects
+    
+    # === Domain 처리를 위한 함수 ===
+    def _to_stix_objects_for_domain(self, domain_name_value: str, domain_data: Dict[str, Any]) -> List[Any]:
+        """Convert Criminal IP API response for Domain to a list of STIX objects"""
+        try:
+            tlp_clear_filter = {"mode": "and", "filters": [{"key": "definition", "values": ["TLP:CLEAR"]}], "filterGroups": []}
+            tlp_marking = self.helper.api.marking_definition.read(filters=tlp_clear_filter)
+            tlp_id = tlp_marking['standard_id'] if tlp_marking else None
+            
+            identity_filter = {"mode": "and", "filters": [{"key": "name", "values": ["CriminalIP Connector"]}], "filterGroups": []}
+            identity = self.helper.api.identity.read(filters=identity_filter)
+            identity_id = identity['standard_id'] if identity else None
+        except Exception as e:
+            self.helper.log_error(f"Error getting standard object IDs: {e}")
+            return []
+        
+        objects = []
+        domain_stix = DomainName(value=domain_name_value)
+        objects.append(domain_stix)
+
+        # 1. 도메인의 악성 여부로 Indicator 생성
+        if domain_data.get("is_malicious"):
+            labels = ["malicious-domain"]
+            if domain_data.get("is_phishing"):
+                labels.append("phishing")
+
+            indicator = Indicator(
+                name=f"Malicious domain: {domain_name_value}",
+                pattern_type="stix",
+                pattern=f"[domain-name:value = '{domain_name_value}']",
+                confidence=90, # 악성으로 판단되면 높은 신뢰도 부여
+                labels=labels,
+                object_marking_refs=[tlp_id],
+                created_by_ref=identity_id,
+            )
+            objects.append(indicator)
+
+        # 2. 관련된 IP 주소와 관계 생성
+        related_ips = domain_data.get("connected_ip", [])
+        for ip_info in related_ips:
+            ip_value = ip_info.get("ip")
+            if ip_value:
+                ip_stix = IPv4Address(value=ip_value)
+                objects.append(ip_stix)
+                
+                # 관계: domain-name이 ipv4-addr로 확인된다
+                resolves_to_rel = Relationship(
+                    domain_stix,
+                    'resolves-to',
+                    ip_stix,
+                    created_by_ref=identity_id
+                )
+                objects.append(resolves_to_rel)
+        
+        return objects
 
     def _process_message(self, data):
         """Main method to process a message from the bus"""
@@ -199,36 +269,57 @@ class CriminalIPConnector:
         if observable is None:
             self.helper.log_error(f"Observable not found with id {entity_id}.")
             return "Observable not found"
-
-        ip_to_enrich = observable.get("value") or observable.get("observable_value")
-        if not ip_to_enrich:
-            self.helper.log_error(f"Could not find IP value in observable: {observable}")
-            return "IP value not found in observable."
-
-        self.helper.log_info(f"Processing IP: {ip_to_enrich}")
-
-        endpoint = "/v1/asset/ip/report"
-        params = {"ip": ip_to_enrich}
-        ip_data = self._call_api(endpoint, params)
         
-        if not ip_data:
-            return f"Could not retrieve data for {ip_to_enrich} from Criminal IP."
+        observable_type = observable.get("entity_type")
+        observable_value = observable.get("value") or observable.get("observable_value")
+
+        stix_objects = []
+        if observable_type == "IPv4-Addr":
+            self.helper.log_info(f"Processing IP: {observable_value}")
+            
+            # 1. 기본 종합 정보 API 호출
+            ip_report_endpoint = "/v1/asset/ip/report"
+            params = {"ip": observable_value}
+            ip_data = self._call_api(ip_report_endpoint, params)
+            
+            # 악성 특징 정보 API 추가 호출
+            malicious_info_endpoint = "/v1/feature/ip/malicious-info"
+            malicious_data = self._call_api(malicious_info_endpoint, params)
+            
+            if ip_data:
+                stix_objects = self._to_stix_objects_for_ip(ip_data, malicious_data)
+
+        # 2. Observable 타입이 도메인일 경우
+        elif observable_type == "Domain-Name":
+            self.helper.log_info(f"Processing Domain: {observable_value}")
+            # API 엔드포인트에 도메인 값을 포함하여 구성
+            endpoint = f"/v1/domain/scan"
+            domain_data = {"query": observable_value}
+            scan_id_data = self._call_api_post(endpoint, domain_data)
+
+            scan_id = scan_id_data.get("data").get("scan_id")
+            if scan_id:
+                endpoint = f"/v2/domain/report/{scan_id}"
+                domain_data = self._call_api(endpoint) # 이 API는 파라미터가 없음
+                if domain_data:
+                    # 도메인 처리 전용 함수 호출
+                    stix_objects = self._to_stix_objects_for_domain(observable_value, domain_data.get("data"))
         
-        self.helper.log_info(f"IP Data: {ip_data}")
-        
-        stix_objects = self._to_stix_objects(ip_data)
+        else:
+            self.helper.log_info(f"Unsupported observable type: {observable_type}")
+            return "Unsupported observable type"
+
         if not stix_objects:
-            return f"No STIX objects created for {ip_to_enrich}."
+            return f"No STIX objects created for {observable_value}."
         
-        self.helper.log_info(f"STIX Objects: {stix_objects}")
+        self.helper.log_info(f"STIX_Objects: {stix_objects}")
         
         bundle = Bundle(objects=stix_objects, allow_custom=True).serialize()
-        result = self.helper.send_stix2_bundle(bundle, entity_id=observable.get("id"))
+        self.helper.send_stix2_bundle(bundle, entity_id=observable.get("id"))
 
-        self.helper.log_info(f"Result: {result}")
-        self.helper.log_info(f"Successfully enriched IP {ip_to_enrich} with {len(stix_objects)} STIX objects.")
+        self.helper.log_info(f"Successfully enriched {observable_type} {observable_value} with {len(stix_objects)} STIX objects.")
         return "Success"
-
+    
     def start(self):
         """Start the connector"""
         self.helper.listen(self._process_message)
