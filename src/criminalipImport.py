@@ -12,10 +12,11 @@ from stix2 import (
     Indicator,
     Bundle,
     Relationship,
-    Vulnerability, 
+    Vulnerability,
+    ObservedData
 )
 from pycti import OpenCTIConnectorHelper, get_config_variable
-
+from datetime import datetime, timezone
 
 class CriminalIPConnector:
     """
@@ -119,12 +120,12 @@ class CriminalIPConnector:
 
         # === malicious-info API 응답을 라벨로 추가 ===
         if malicious_info_data:
-            if malicious_info_data.get("is_scanner"):
-                labels.append("Scanner")
-            if malicious_info_data.get("is_c2"):
-                labels.append("C2-Server")
-            if malicious_info_data.get("is_tor"):
-                labels.append("TOR")
+            if malicious_info_data.get("is_malicious"):
+                labels.append("Malicious")
+            if malicious_info_data.get("is_anonymous_vpn"):
+                labels.append("Anonymous VPN")
+            if malicious_info_data.get("can_remote_access"):
+                labels.append("Remote Access")
             if malicious_info_data.get("is_vpn"):
                 labels.append("VPN")
 
@@ -196,13 +197,13 @@ class CriminalIPConnector:
                 )
                 objects.append(vuln_stix)
                 
-                vuln_rel = Relationship(
-                    ipv4_addr_stix,
-                    'has',
-                    vuln_stix,
+                rel_indicator_vuln = Relationship(
+                    indicator_score.id,
+                    'indicates',
+                    vuln_stix.id,
                     created_by_ref=identity_id
                 )
-                objects.append(vuln_rel)
+                objects.append(rel_indicator_vuln)
                 
         return objects
     
