@@ -19,14 +19,8 @@ from pycti import OpenCTIConnectorHelper, get_config_variable
 from datetime import datetime, timezone
 
 class CriminalIPConnector:
-    """
-    Criminal IP Enrichment Connector
-    """
 
     def __init__(self):
-        """
-        Initialize the CriminalIPConnector with necessary configurations
-        """
         config_file_path = os.path.join(os.path.dirname(__file__), "config.yml")
         config = (
             yaml.load(open(config_file_path), Loader=yaml.FullLoader)
@@ -44,7 +38,6 @@ class CriminalIPConnector:
         self.base_url = "https://api.criminalip.io"
 
     def _call_api(self, endpoint: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """A helper method to call the Criminal IP API"""
         url = f"{self.base_url}{endpoint}"
         headers = {"x-api-key": self.api_key}
         try:
@@ -67,7 +60,7 @@ class CriminalIPConnector:
             return None
     
     def _convert_score_to_confidence(self, score_str: str) -> int:
-        """Converts Criminal IP score string to STIX confidence integer."""
+        # score -> confidence
         score_map = {
             "Critical": 95,
             "Dangerous": 85,
@@ -77,13 +70,11 @@ class CriminalIPConnector:
         }
         return score_map.get(score_str, 0)
     
-    # === IP 처리를 위한 함수 ===
+    # IP 데이터 보강을 위한 함수
     def _to_stix_objects_for_ip(self, ip_data: Dict[str, Any], malicious_info_data: Dict[str, Any] = None) -> List[Any]:
-        """Convert Criminal IP API response to a list of STIX objects"""
         
-        # === [디버깅 코드] 이 라인이 로그에 보이는지 확인하기 위한 코드 ===
+        # 로그 확인용 코드
         self.helper.log_info("--- RUNNING LATEST CODE VERSION ---")
-        # ===========================================================
         
         try:
             tlp_clear_filter = {"mode": "and", "filters": [{"key": "definition", "values": ["TLP:CLEAR"]}], "filterGroups": []}
@@ -118,7 +109,7 @@ class CriminalIPConnector:
             if category.get("type"):
                 labels.append(category.get("type").upper())
 
-        # === malicious-info API 응답을 라벨로 추가 ===
+        # malicious-info API 응답을 라벨로 추가
         if malicious_info_data:
             if malicious_info_data.get("is_malicious"):
                 labels.append("Malicious")
@@ -207,7 +198,7 @@ class CriminalIPConnector:
                 
         return objects
     
-    # === Domain 처리를 위한 함수 ===
+    # Domain 데이터 보강을 위한 함수
     def _to_stix_objects_for_domain(self, domain_name_value: str, domain_data: Dict[str, Any]) -> List[Any]:
         """Convert Criminal IP API response for Domain to a list of STIX objects"""
         try:
@@ -226,7 +217,7 @@ class CriminalIPConnector:
         domain_stix = DomainName(value=domain_name_value)
         objects.append(domain_stix)
 
-        # 1. 도메인의 악성 여부로 Indicator 생성
+        # 도메인의 악성 여부로 Indicator 생성
         if domain_data.get("is_malicious"):
             labels = ["malicious-domain"]
             if domain_data.get("is_phishing"):
@@ -243,7 +234,7 @@ class CriminalIPConnector:
             )
             objects.append(indicator)
 
-        # 2. 관련된 IP 주소와 관계 생성
+        # 관련된 IP 주소와 관계 생성
         related_ips = domain_data.get("connected_ip", [])
         for ip_info in related_ips:
             ip_value = ip_info.get("ip")
@@ -278,7 +269,7 @@ class CriminalIPConnector:
         if observable_type == "IPv4-Addr":
             self.helper.log_info(f"Processing IP: {observable_value}")
             
-            # 1. 기본 종합 정보 API 호출
+            # 기본 종합 정보 API 호출
             ip_report_endpoint = "/v1/asset/ip/report"
             params = {"ip": observable_value}
             ip_data = self._call_api(ip_report_endpoint, params)
@@ -290,7 +281,7 @@ class CriminalIPConnector:
             if ip_data:
                 stix_objects = self._to_stix_objects_for_ip(ip_data, malicious_data)
 
-        # 2. Observable 타입이 도메인일 경우
+        # Observable 타입이 도메인일 경우
         elif observable_type == "Domain-Name":
             self.helper.log_info(f"Processing Domain: {observable_value}")
             # API 엔드포인트에 도메인 값을 포함하여 구성
@@ -301,7 +292,7 @@ class CriminalIPConnector:
             scan_id = scan_id_data.get("data").get("scan_id")
             if scan_id:
                 endpoint = f"/v2/domain/report/{scan_id}"
-                domain_data = self._call_api(endpoint) # 이 API는 파라미터가 없음
+                domain_data = self._call_api(endpoint) # 이 API는 파라미터 없음
                 if domain_data:
                     # 도메인 처리 전용 함수 호출
                     stix_objects = self._to_stix_objects_for_domain(observable_value, domain_data.get("data"))
@@ -322,7 +313,7 @@ class CriminalIPConnector:
         return "Success"
     
     def start(self):
-        """Start the connector"""
+       # 커넥터 시작
         self.helper.listen(self._process_message)
 
 if __name__ == "__main__":
