@@ -2,6 +2,7 @@ import os
 import sys
 import yaml
 import requests
+import time
 from typing import Dict, Any, List
 
 from stix2 import (
@@ -13,10 +14,9 @@ from stix2 import (
     Bundle,
     Relationship,
     Vulnerability,
-    ObservedData
 )
 from pycti import OpenCTIConnectorHelper, get_config_variable
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 class CriminalIPConnector:
 
@@ -217,18 +217,30 @@ class CriminalIPConnector:
         domain_stix = DomainName(value=domain_name_value)
         objects.append(domain_stix)
 
-        # 도메인의 악성 여부로 Indicator 생성
-        if domain_data.get("is_malicious"):
+        ### 2025-09-16 ###
+        summary = domain_data.get("summary", {})
+        phishing_prob = summary.get("url_phishing_prob") # TODO: Phishing Prob 몇 점 이상이 악성인지 확인.
+
+        if phishing_prob > 20 or summary.get("phishing_record") or summary.get("suspicious_file"):
             labels = ["malicious-domain"]
-            if domain_data.get("is_phishing"):
-                labels.append("phishing")
+            description_parts = ["Criminal IP URL Scan Report Findings:"]
+
+            labels.append(f"phishing-record-{summary.get('phishing_record')}")
+            description_parts.append("- Phishing record found.")
+            labels.append(f"suspicious_file-{summary.get('suspicious_file')}")
+            description_parts.append("- Suspicious file detected on the page.")
+            labels.append(f"credential-input-field-{summary.get('cred_input')}")
+            description_parts.append("- Page contains credential input fields (potential phishing).")
+            labels.append(f"favicon-domain-mismatch-{summary.get('diff_domain_favicon')}")
+            description_parts.append("- Favicon domain does not match the page domain.")
 
             indicator = Indicator(
                 name=f"Malicious domain: {domain_name_value}",
                 pattern_type="stix",
                 pattern=f"[domain-name:value = '{domain_name_value}']",
-                confidence=90, # 악성으로 판단되면 높은 신뢰도 부여
-                labels=labels,
+                confidence=90, # TODO: score 있는지 확인. 어떤 score를 쓸지도 확인.
+                labels=list(set(labels)),
+                description="\n".join(description_parts),
                 object_marking_refs=[tlp_id],
                 created_by_ref=identity_id,
             )
@@ -250,6 +262,22 @@ class CriminalIPConnector:
                     created_by_ref=identity_id
                 )
                 objects.append(resolves_to_rel)
+
+        # 국가 등록.
+        countries = summary.get("list_of_countries", [])
+        for country_code in countries:
+            loc_stix = Location(country=country_code.upper(), allow_custom=True)
+            objects.append(loc_stix)
+
+             # 관계: domain-name이 location과 관련됨
+            related_to_rel = Relationship(
+                domain_stix.id,
+                'related-to',
+                loc_stix.id,
+                description=f"Domain {domain_name_value} is associated with servers in {country_code.upper()}.",
+                created_by_ref=identity_id
+            )
+            objects.append(related_to_rel)
         
         return objects
 
@@ -283,13 +311,41 @@ class CriminalIPConnector:
 
         # Observable 타입이 도메인일 경우
         elif observable_type == "Domain-Name":
+            scan_id = -1
             self.helper.log_info(f"Processing Domain: {observable_value}")
-            # API 엔드포인트에 도메인 값을 포함하여 구성
-            endpoint = f"/v1/domain/scan"
-            domain_data = {"query": observable_value}
-            scan_id_data = self._call_api_post(endpoint, domain_data)
+            # 최근 1주일 내의 도메인 리포트 확인.
+            reports_endpoint = "/v1/domain/reports"
+            reports_data = self._call_api(reports_endpoint, {"query": observable_value, "offset": 0})
+            reports = reports_data.get("data")
+            if reports and len(reports) > 0: # Reports가 존재하면??
+                report_time_str = reports.get("reports", [])[0].get("reg_dtime")
+                report_time = datetime.strptime(report_time_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                one_week_ago = datetime.now(timezone.utc) - timedelta(days=7)
 
-            scan_id = scan_id_data.get("data").get("scan_id")
+                if report_time >= one_week_ago:
+                    scan_id = reports.get("reports", [])[0].get("scan_id")
+                else: # report가 1주일보다 이전.
+                    endpoint = f"/v1/domain/scan"
+                    domain_data = {"query": observable_value}
+                    scan_id_data = self._call_api_post(endpoint, domain_data)
+                    scan_id = scan_id_data.get("data").get("scan_id")
+
+                    # 이거 스캔 끝났는지 확인
+                    flag = True
+                    while flag:
+                        endpoint = f"/v1/domain/status/{scan_id}"
+                        scan_data = self._call_api(endpoint)
+
+                        scan_result = scan_data.get("data")
+                        if scan_result:
+                            score = scan_result.get("scan_percentage")
+                            if (score >= 100):
+                                flag = False
+                                break
+                        
+                        time.sleep(3) # 계속해서 요청 안가게 3초씩 텀 주기.
+            
+            # scan_id 찾았으면?
             if scan_id:
                 endpoint = f"/v2/domain/report/{scan_id}"
                 domain_data = self._call_api(endpoint) # 이 API는 파라미터 없음
