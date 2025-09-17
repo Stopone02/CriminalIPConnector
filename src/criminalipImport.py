@@ -217,9 +217,8 @@ class CriminalIPConnector:
         domain_stix = DomainName(value=domain_name_value)
         objects.append(domain_stix)
 
-        ### 2025-09-16 ###
         summary = domain_data.get("summary", {})
-        phishing_prob = summary.get("url_phishing_prob") # TODO: Phishing Prob 몇 점 이상이 악성인지 확인.
+        phishing_prob = summary.get("url_phishing_prob")
 
         if phishing_prob > 20 or summary.get("phishing_record") or summary.get("suspicious_file"):
             labels = ["malicious-domain"]
@@ -238,7 +237,7 @@ class CriminalIPConnector:
                 name=f"Malicious domain: {domain_name_value}",
                 pattern_type="stix",
                 pattern=f"[domain-name:value = '{domain_name_value}']",
-                confidence=90, # TODO: score 있는지 확인. 어떤 score를 쓸지도 확인.
+                confidence=phishing_prob,
                 labels=list(set(labels)),
                 description="\n".join(description_parts),
                 object_marking_refs=[tlp_id],
@@ -254,7 +253,7 @@ class CriminalIPConnector:
                 ip_stix = IPv4Address(value=ip_value)
                 objects.append(ip_stix)
                 
-                # 관계: domain-name이 ipv4-addr로 확인된다
+                # 관계: domain-name이 ipv4-addr로 확인됨
                 resolves_to_rel = Relationship(
                     domain_stix,
                     'resolves-to',
@@ -263,7 +262,7 @@ class CriminalIPConnector:
                 )
                 objects.append(resolves_to_rel)
 
-        # 국가 등록.
+        # 국가 등록
         countries = summary.get("list_of_countries", [])
         for country_code in countries:
             loc_stix = Location(country=country_code.upper(), allow_custom=True)
@@ -313,7 +312,7 @@ class CriminalIPConnector:
         elif observable_type == "Domain-Name":
             scan_id = -1
             self.helper.log_info(f"Processing Domain: {observable_value}")
-            # 최근 1주일 내의 도메인 리포트 확인.
+            # 최근 1주일 내의 도메인 리포트 확인
             reports_endpoint = "/v1/domain/reports"
             reports_data = self._call_api(reports_endpoint, {"query": observable_value, "offset": 0})
             reports = reports_data.get("data")
@@ -324,13 +323,13 @@ class CriminalIPConnector:
 
                 if report_time >= one_week_ago:
                     scan_id = reports.get("reports", [])[0].get("scan_id")
-                else: # report가 1주일보다 이전.
+                else: # report가 1주일보다 이전
                     endpoint = f"/v1/domain/scan"
                     domain_data = {"query": observable_value}
                     scan_id_data = self._call_api_post(endpoint, domain_data)
                     scan_id = scan_id_data.get("data").get("scan_id")
 
-                    # 이거 스캔 끝났는지 확인
+                    # 스캔 끝났는지 확인
                     flag = True
                     while flag:
                         endpoint = f"/v1/domain/status/{scan_id}"
@@ -343,9 +342,9 @@ class CriminalIPConnector:
                                 flag = False
                                 break
                         
-                        time.sleep(3) # 계속해서 요청 안가게 3초씩 텀 주기.
+                        time.sleep(3) # 요청이 계속 가지 않도록 3초씩 텀 주기
             
-            # scan_id 찾았으면?
+            # scan_id 찾으면
             if scan_id:
                 endpoint = f"/v2/domain/report/{scan_id}"
                 domain_data = self._call_api(endpoint) # 이 API는 파라미터 없음
