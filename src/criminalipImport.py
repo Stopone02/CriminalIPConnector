@@ -136,10 +136,10 @@ class CriminalIPConnector:
             labels=list(set(labels)),
             object_marking_refs=[tlp_id],
             created_by_ref=identity_id,
-            custom_properties={
-                "x_criminalip_inbound_score": inbound_score_str,
-                "x_criminalip_outbound_score": outbound_score_str
-            }
+            description="\n".join({
+                f"- x_criminalip_inbound_score: {inbound_score_str}",
+                f"- x_criminalip_outbound_score: {outbound_score_str}"
+            })
         )
         objects.append(indicator_score)
 
@@ -220,7 +220,7 @@ class CriminalIPConnector:
         summary = domain_data.get("summary", {})
         phishing_prob = summary.get("url_phishing_prob")
 
-        if phishing_prob > 20 or summary.get("phishing_record") or summary.get("suspicious_file"):
+        if phishing_prob > 20 or summary.get("phishing_record") > 0 or summary.get("suspicious_file") > 0:
             labels = ["malicious-domain"]
             description_parts = ["Criminal IP URL Scan Report Findings:"]
 
@@ -232,6 +232,8 @@ class CriminalIPConnector:
             description_parts.append("- Page contains credential input fields (potential phishing).")
             labels.append(f"favicon-domain-mismatch-{summary.get('diff_domain_favicon')}")
             description_parts.append("- Favicon domain does not match the page domain.")
+
+            description_parts.append(f"- x_criminalip_phishing_prob: {phishing_prob}")
 
             indicator = Indicator(
                 name=f"Malicious domain: {domain_name_value}",

@@ -1,86 +1,34 @@
-# Criminal IP Connector (OpenCTI) — Skeleton
+# OpenCTI용 Criminal IP 커넥터
 
-이 저장소는 OpenCTI의 내부 enrichment 커넥터 구조를 참고하여 **Criminal IP 연동용 커넥터 뼈대**를 제공합니다.
+이 OpenCTI용 커넥터는 [Criminal IP API](https://www.criminalip.io/)의 포괄적인 위협 인텔리전스 데이터를 활용하여 옵저버블(Observable)의 강화(enrichment) 작업을 자동화합니다. 보안 분석가들이 OpenCTI 플랫폼 내에서 IP 주소와 도메인에 대한 컨텍스트를 즉시 파악하여 조사 프로세스를 간소화할 수 있도록 설계되었습니다.
 
-## 기능 개요
-- Criminal IP API(`/v1/ip/data`, `/v1/ip/summary`)를 호출하여 IP 관련 속성(평판 점수, 태그, ASN, 국가 등)을 수집
-- **STIX 매핑 규칙 적용 → STIX 2.1 객체 생성** (IPv4-Addr, Indicator, Autonomous-System, Location)
-- 현재는 **데모 모드**로 단일 IP를 조회하여 STIX Bundle(JSON)을 출력합니다. (OpenCTI로의 전송은 TODO)
+## 주요 특징
 
-## 디렉토리 구조
-```
-criminalip-connector/
-├── __docs__/media/                 # 문서 미디어
-├── src/
-│   ├── config.yml.sample           # 설정 샘플
-│   ├── config.yml                  # (직접 생성) 실제 설정
-│   ├── requirements.txt            # 파이썬 의존성
-│   └── criminalipImport.py         # 핵심 실행 로직
-├── Dockerfile
-├── docker-compose.yml
-└── entrypoint.sh
-```
+- **데이터 자동 보강**: OpenCTI에 추가되는 **IP 주소** 및 **도메인 이름** 옵저버블에 대한 상세 정보를 자동으로 가져옵니다.
+- **포괄적인 위험 분석**: 전반적인 위험 점수, 피싱 확률, 알려진 취약점 등 Criminal IP의 광범위한 데이터를 활용하여 잠재적 위협에 대한 전체적인 시각을 제공합니다.
+- **STIX 2.1 표준 준수**: **인디케이터(Indicators)**, **취약점(Vulnerabilities)**, **위치(Locations)**, **관계(Relationships)** 등 STIX 2.1 객체를 생성하고 연결하여 OpenCTI의 데이터 모델과 원활하게 통합됩니다.
+- **사용자 정의 데이터 매핑**: OpenCTI 내의 표준 STIX 필드와 사용자 정의 속성을 채워 원본 데이터를 보존하고 분석가에게 더 깊은 컨텍스트를 제공합니다.
 
-## 설치 및 실행
+## 보강되는 정보
 
-### 1) 로컬 실행
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r src/requirements.txt
+이 커넥터는 Criminal IP API에서 다양한 데이터 포인트를 가져와 데이터에 대한 상세한 강화 정보를 제공합니다.
 
-# 환경변수로 API Key 전달
-export CRIMINALIP_TOKEN="YOUR_API_KEY"
-export TEST_IP="8.8.8.8"  # 선택
+### IP 주소에 대한 정보:
 
-# 설정 파일 준비 (옵션)
-cp src/config.yml.sample src/config.yml
-# 필요한 값 채우기 (OPENCTI_URL 등은 데모 모드에서는 사용 안함)
+- **IP 평판**: 인바운드 및 아웃바운드 위험 점수를 제공합니다.
+- **위치**: 국가, 도시, 지역 정보를 사용하여 **위치(Location)** 객체를 생성하고 IP 주소에 연결합니다.
+- **AS 정보**: IP가 속한 자율 시스템(Autonomous System) 번호와 이름을 가져와 AutonomousSystem 객체를 생성하고 ‘belongs-to’ 관계를 맺습니다.
+- **취약점**: 발견된 CVE는 **취약점(Vulnerability)** 객체로 자동 임포트되어 해당 IP 주소와 연결됩니다.
+- **라벨**: `VPN`, `TOR`, `PROXY`, `HOSTING`과 같은 다양한 태그가 빠른 식별을 위해 라벨로 추가됩니다.
 
-python src/criminalipImport.py
-```
-출력: STIX Bundle(JSON)
+### 도메인 이름에 대한 정보:
 
-### 2) Docker 실행
-```bash
-# config.yml 생성 (필수)
-cp src/config.yml.sample src/config.yml
+- **도메인 위험 점수**: 위험 평가를 위해 포괄적인 `domain_score`와 **`phishing_prob`**(피싱 확률)이 제공됩니다.
+- **위협 설명**: Criminal IP의 URL 스캔 결과를 바탕으로 피싱 기록, 의심스러운 파일과 같은 주요 위협을 요약하는 설명(Description)이 생성됩니다.
+- **라벨**:  파비콘 도메인의 불일치와 같은 특정 발견 사항이 쉬운 필터링 및 분석을 위해 라벨(Labels)로 추가됩니다.
+- **IP 확인**: 관련된 IP 주소를 식별하고 도메인과 해당 IP 주소 객체 간에 ‘**resolves-to’** 관계를 생성합니다.
+- **국가 정보**: 도메인과 관련된 서버가 위치한 국가 정보를 가져와 위치(Location) 객체를 생성하고 ‘related-to’ 관계를 맺습니다.
 
-# 환경변수로 API Key 주입
-export CRIMINALIP_TOKEN="YOUR_API_KEY"
-export TEST_IP="1.1.1.1"  # 선택
+## 작동 방식
 
-docker compose up --build
-```
-
-## STIX 변환 매핑 (요약)
-| API 필드                    | STIX 객체           | STIX 속성/설명                            |
-|----------------------------|---------------------|-------------------------------------------|
-| `ip`                       | `IPv4-Addr`         | `value`                                   |
-| `score.inbound/outbound`   | `Indicator`         | `labels`(inbound/outbound) + `confidence` |
-| `tags.is_*`(VPN/TOR 등)    | `Indicator`         | `labels` (예: `VPN`, `TOR`, `PROXY`)      |
-| `asn`                      | `Autonomous-System` | `number`                                  |
-| `countryCode`              | `Location`          | `country`                                 |
-
-## 데이터 흐름
-```
-[시작] docker-compose up
-    ↓
-[entrypoint.sh 실행]
-    ↓
-[criminalipImport.py 실행]
-    ↓
-[config.yml로부터 설정 로딩]
-    ↓
-[Criminal IP API 호출하여 Observable 관련 정보 수집]
-    ↓
-[수집된 정보 → STIX 매핑 규칙 적용 → STIX 포맷 변환]
-    ↓
-[OpenCTI API 또는 메시지 큐로 전송]   # TODO
-    ↓
-[OpenCTI UI에서 enrichment 결과 확인] # TODO
-```
-
-## OpenCTI 연동 가이드 (TODO)
-- Python OpenCTI client를 사용하거나, 기존 Shodan 커넥터 코드 패턴을 참고하여 메시지 큐(RabbitMQ)로 전송
-- `CONNECTOR_SCOPE`에 따라 지원 Observable 필터링
-- 에러/재시도/Rate-Limit 처리
+OpenCTI에 새로운 IP 주소나 도메인 이름이 생성되면 커넥터가 트리거됩니다. 그런 다음 관련 Criminal IP API 엔드포인트에 요청을 보내 인텔리전스를 수집합니다. 반환된 데이터는 파싱되어 STIX 2.1 객체 번들을 만드는 데 사용되며, 이 번들은 다시 OpenCTI로 전송되어 원래의 데이터를 보강합니다. 이 프로세스는 다양한 데이터 포인트를 단일하고 이해하기 쉬운 인디케이터로 결합하여 잠재적 위협에 대한 상세하고 실행 가능한 뷰를 제공합니다.
